@@ -10,8 +10,7 @@ function R = check_03_target_calc()
 R = struct('pass', false, 'notes', {{}}, 'error', '');
 
 % --- Make this check robust against dbstop-if-error ---
-st_before = dbstatus('iferror');   %#ok<NASGU>
-dbclear if error
+%dbclear if error
 
 try
     C = config_constants();
