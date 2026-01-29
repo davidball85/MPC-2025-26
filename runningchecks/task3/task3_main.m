@@ -3,7 +3,7 @@ function logs = task3_main()
 % Full Task 3 simulation (nonlinear plant, augmented KF, target calc, offset-free MPC).
 % Disturbance: -20N step at t=10s in surge channel (from config).
 
-clc; close all;
+
 
 C = config_constants();
 T = config_tuning();
