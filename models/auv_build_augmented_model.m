@@ -6,11 +6,11 @@ function [A_aug, B_aug, C_aug, Bw] = auv_build_augmented_model(A, B, C)
 %   d_{k+1} = d_k
 %
 % Here d is a surge FORCE (N), entering through the surge channel.
-% Therefore Bw is the first column of B (discrete-time).
+% Therefore Bw is -first column of B (discrete-time), matching plant sign.
 
 nx = size(A,1);
 
-Bw = B(:,1);
+Bw = -B(:,1);
 
 A_aug = [A, Bw;
          zeros(1,nx), 1];

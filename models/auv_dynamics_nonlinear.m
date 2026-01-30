@@ -37,13 +37,8 @@ end
 % --- DEBUG: disturbance sign check (temporary) ---
 %fprintf('d=%.1f  udot_contrib=%.3f\n', d_surge, d_surge/mx);
 
-% Surge acceleration
-udot = (1/mx) * (Tsurge - d_surge - Du*u*abs(u));
-
-
-
 % --- Nonlinear dynamics (brief Eq. 1-6) ---
-udot = (1/mx) * (Tsurge + d_surge - Du * u * abs(u));               % (1)
+udot = (1/mx) * (Tsurge - d_surge - Du * u * abs(u));               % (1)
 wdot = (1/mz) * (Theave - Dw * w * abs(w));                         % (2)
 qdot = (1/Iy) * (taupitch - Dq * q * abs(q) - Mrest * sin(theta));  % (3)
 

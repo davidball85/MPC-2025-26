@@ -1,9 +1,21 @@
 function logs = task3_main()
 % task3_main
 % Full Task 3 simulation (nonlinear plant, augmented KF, target calc, offset-free MPC).
-% Disturbance: -20N step at t=10s in surge channel (from config).
+%
+% IMPORTANT:
+% This project uses the convention that a positive surge disturbance d_surge
+% OPPOSES forward motion in the nonlinear plant:
+%
+%   u_dot = (1/mx) * (Tsurge - d_surge - drag)
+%
+% Therefore the discrete disturbance channel used in the augmented model and
+% target calculator must be the OPPOSITE sign of the surge thrust channel:
+%
+%   Bw = -B(:,1)
+%
+% This file ensures model.Bw matches auv_build_augmented_model.m.
 
-
+clc; clear;
 
 C = config_constants();
 T = config_tuning();
@@ -12,14 +24,16 @@ T = config_tuning();
 [Ac, Bc, Cmeas, Dc] = auv_linearise(C);
 [Ad, Bd, ~, ~]      = auv_discretise(Ac, Bc, Cmeas, Dc, C.Ts);
 
-Bw = Bd(:,1);       % surge disturbance channel (force)
+% Build a single consistent augmented model (this defines the correct Bw sign)
+[A_aug, B_aug, C_aug, Bw] = auv_build_augmented_model(Ad, Bd, Cmeas);
+
+% Package model for target calc / controller (use Bw from the builder!)
 model.A  = Ad;
 model.B  = Bd;
 model.Bw = Bw;
 model.Cy = Cmeas;
 
-% Augmented observer model
-[A_aug, B_aug, C_aug, ~] = auv_build_augmented_model(Ad, Bd, Cmeas);
+% Augmented observer
 est = kalman_augmented_init(A_aug, B_aug, C_aug, T);
 
 % References
@@ -42,16 +56,16 @@ if C.dist.enable
 end
 
 % Logs
-logs.t = t;
-logs.x = zeros(6,K+1); logs.x(:,1) = x;
-logs.u = zeros(3,K);
-logs.y = zeros(2,K);
+logs.t    = t;
+logs.x    = zeros(6,K+1); logs.x(:,1) = x;
+logs.u    = zeros(3,K);
+logs.y    = zeros(2,K);
 logs.xhat = zeros(6,K);
 logs.dhat = zeros(1,K);
 logs.uss  = zeros(3,K);
 
 for k = 1:K
-    % measurement y=[xp;zp] with noise
+    % Measurement y=[xp;zp] with noise
     y_true = Cmeas*x;
     v = [sqrt(T.kf.R(1,1))*randn; sqrt(T.kf.R(2,2))*randn];
     y = y_true + v;
@@ -67,17 +81,17 @@ for k = 1:K
     x_hat = est.xhat(1:6);
     d_hat = est.xhat(end);
 
-    % controller (offset-free MPC wrapper)
-    OUT = mpc_offsetfree_wrapper(x_hat, d_hat, x_ref, model, C, T);
+    % Offset-free controller (uses model.Bw -> must be consistent!)
+    OUT   = mpc_offsetfree_wrapper(x_hat, d_hat, x_ref, model, C, T);
     u_cmd = OUT.u_cmd;
 
-    % apply disturbance to plant via config field (no hardcoding)
+    % Apply disturbance to plant
     C.d_surge = d_true(k);
 
-    % nonlinear plant step
+    % Nonlinear plant step
     x = auv_step_nonlinear(x, u_cmd, C);
 
-    % log
+    % Log
     logs.u(:,k)     = u_cmd;
     logs.y(:,k)     = y;
     logs.x(:,k+1)   = x;

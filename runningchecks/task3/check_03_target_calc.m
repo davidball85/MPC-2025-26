@@ -39,12 +39,12 @@ try
 
     model.A  = Ad;
     model.B  = Bd;
-    model.Bw = Bd(:,1);
+    model.Bw = -Bd(:,1);
 
     x_ref = Tcfg.x_ref_task3(:);
 
     % Sweep range (keep aligned with your existing plot)
-    dhats = linspace(-40, 0, 41);
+    dhats = linspace(0, 40, 41);
     uss1  = zeros(size(dhats));
     err_flags = false(size(dhats));
 
@@ -89,7 +89,7 @@ try
     saveas(fig, out_png);
 
     R.notes{end+1} = sprintf('Sweep done: d_hat in [%.1f, %.1f] N.', dhats(1), dhats(end));
-    R.notes{end+1} = 'Expected trend: more negative disturbance -> higher (more positive) surge thrust.';
+    R.notes{end+1} = 'Expected trend: larger resisting disturbance -> higher (more positive) surge thrust.';
     R.notes{end+1} = ['Saved plot: ', out_png];
 
     R.pass = true;
