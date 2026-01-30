@@ -51,6 +51,11 @@ C.dist.enable = true;
 C.dist.surge_step_time_s = 10;      % seconds
 C.dist.surge_step_N      = -20;     % Newtons (opposes motion)
 
+% --- Compatibility aliases for runningchecks scripts ---
+C.dist.t_step_s = C.dist.surge_step_time_s;
+C.dist.step_N   = C.dist.surge_step_N;
+
+
 % Default (no disturbance)
 C.dist.surge_bias_N = 0;            % Newtons
 
