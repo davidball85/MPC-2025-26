@@ -7,16 +7,11 @@ function R = check_02_kalman_observer()
 %     - constant surge disturbance force d
 %   using only y = [xp; zp] measurements.
 %
-% Adds extra diagnostics (for "story" + troubleshooting)
+% Adds extra diagnostics
 %   - Disturbance estimation error e_d = d_true - d_hat
 %   - Mean / std of e_d after convergence
-%   - Simple sign-consistency flag (helps catch sign convention mismatch)
-%
-% Plant: nonlinear discrete step (Task 1 plant), disturbance injected via Ccfg.d_surge.
-% Measurement: y = [xp; zp] + noise (from tuning config).
-%
-% Outputs
-%   R.pass, R.notes, R.error
+%   - Sign-consistency flag
+%   - Disturbance estimate settling time (±5% band)
 
 R = struct('pass', false, 'notes', {{}}, 'error', '');
 
@@ -27,7 +22,6 @@ try
     Ccfg = config_constants();
     Tcfg = config_tuning();
 
-    % State dimension (robust: do NOT assume Ccfg.nx exists)
     nx = numel(Ccfg.x_eq);
 
     % ----------------------------
@@ -56,7 +50,6 @@ try
     N = round(t_end/Ts) + 1;
     t = (0:N-1)*Ts;
 
-    % Equilibrium input
     x_eq = Ccfg.x_eq;
     u_eq = auv_equilibrium(x_eq, Ccfg);
     u_applied = u_eq;
@@ -80,7 +73,6 @@ try
     x_true_log = zeros(nx, N);
     d_hat_log  = zeros(1, N);
 
-    % Measurement noise covariance (y = [xp; zp])
     Rmeas = Tcfg.kf.R;
 
     % ----------------------------
@@ -116,34 +108,6 @@ try
         x_true = auv_step_nonlinear(x_true, u_applied, Ccfg);
     end
 
-    % --- Disturbance estimate settling time (±5% band around final value) ---
-tStep = Ccfg.dist.t_step_s;          % or whatever your config field is called
-d_inf = mean(d_hat(end-20:end));     % final value estimate (last 20 samples)
-band  = 0.05 * max(1e-6, abs(d_inf));
-
-idxStep = find(t >= tStep, 1, 'first');
-
-% Find earliest time after the step where d_hat stays within band to the end
-idxSet = NaN;
-for k = idxStep:numel(t)
-    if all(abs(d_hat(k:end) - d_inf) <= band)
-        idxSet = k;
-        break;
-    end
-end
-
-if isnan(idxSet)
-    dSettleStr = sprintf('Disturbance estimate did not settle within ±5%% band by end of sim.');
-else
-    t_set = t(idxSet);
-    T_set = t_set - tStep;
-    dSettleStr = sprintf('Disturbance estimate settling time (±5%% band) ≈ %.2f s.', T_set);
-end
-
-% Add to console notes
-R.notes{end+1} = dSettleStr;
-
-
     % ----------------------------
     % Diagnostics
     % ----------------------------
@@ -167,13 +131,51 @@ R.notes{end+1} = dSettleStr;
         ed_mean = mean(e_d(tail_idx));
         ed_std  = std(e_d(tail_idx));
 
+     % --- Disturbance estimate settling time (±5% band around final value) ---
+% IMPORTANT: use the logged VECTOR d_hat_log, not the scalar d_hat
+
+tStep   = Ccfg.dist.surge_step_time_s;              % correct config field
+idxStep = find(t >= tStep, 1, 'first');
+if isempty(idxStep), idxStep = 1; end
+
+tailN   = min(20, numel(d_hat_log));
+tailIdx = (numel(d_hat_log)-tailN+1) : numel(d_hat_log);
+d_inf   = mean(d_hat_log(tailIdx));                 % final value estimate
+
+band = 0.05 * max(1e-6, abs(d_inf));                % ±5% band
+
+idxSet = NaN;
+for kk = idxStep:numel(t)
+    if all(abs(d_hat_log(kk:end) - d_inf) <= band)
+        idxSet = kk;
+        break;
+    end
+end
+
+if isnan(idxSet)
+    R.notes{end+1} = 'Disturbance estimate did not settle within ±5% band by end of sim.';
+else
+    T_set = t(idxSet) - tStep;
+    R.notes{end+1} = sprintf('Disturbance estimate settling time (±5%% band) ≈ %.2f s.', T_set);
+end
+
+
+        if isnan(idxSet)
+            dSettleStr = 'Disturbance estimate did not settle within ±5% band by end of sim.';
+        else
+            T_set = t(idxSet) - tStep;
+            dSettleStr = sprintf('Disturbance estimate settling time (±5%% band) ≈ %.2f s.', T_set);
+        end
+
+        % Notes (console)
         R.notes{end+1} = sprintf('Mean d_hat before step   = %.2f N.', d_pre);
         R.notes{end+1} = sprintf('Mean d_hat after step    = %.2f N (true %.1f N).', d_post, Ccfg.dist.surge_step_N);
         R.notes{end+1} = sprintf('|d_hat change| after step = %.2f N.', d_jump);
         R.notes{end+1} = sprintf('Mean |u_hat - u_true| before = %.4f, after = %.4f.', uerr_pre, uerr_post);
         R.notes{end+1} = sprintf('Disturbance estimation error e_d=d_true-d_hat (tail): mean=%.2f N, std=%.2f N.', ed_mean, ed_std);
+        R.notes{end+1} = dSettleStr;
 
-        % Simple sign-consistency check (helps catch sign convention mismatch)
+        % Simple sign-consistency check
         s_true = sign(Ccfg.dist.surge_step_N);
         s_hat  = sign(d_post);
         if s_true ~= 0 && s_hat ~= 0 && s_true ~= s_hat
@@ -222,12 +224,14 @@ R.notes{end+1} = dSettleStr;
     nexttile;
     plot(t, e_d);
     grid on; xlabel('Time (s)'); ylabel('e_d (N)');
-    title('Disturbance estimation error $e_d = d_{\mathrm{true}} - \hat{d}$', ...
-      'Interpreter','latex');
-
+    title('Disturbance estimation error $e_d = d_{\mathrm{true}} - \hat{d}$', 'Interpreter','latex');
 
     out_png = fullfile(fileparts(mfilename('fullpath')), 'task3_check02_kf_disturbance.png');
-    saveas(fig1, out_png);
+    try
+        exportgraphics(fig1, out_png, 'Resolution', 300);
+    catch
+        saveas(fig1, out_png);
+    end
     R.notes{end+1} = ['Saved plot: ', out_png];
 
     fig2 = figure(321); clf(fig2);
@@ -255,7 +259,11 @@ R.notes{end+1} = dSettleStr;
     legend('true','est','Location','best');
 
     out_png2 = fullfile(fileparts(mfilename('fullpath')), 'task3_check02b_states.png');
-    saveas(fig2, out_png2);
+    try
+        exportgraphics(fig2, out_png2, 'Resolution', 300);
+    catch
+        saveas(fig2, out_png2);
+    end
     R.notes{end+1} = ['Saved plot: ', out_png2];
 
     R.notes{end+1} = sprintf('Disturbance step configured: %.1f N at t=%.1f s.', ...

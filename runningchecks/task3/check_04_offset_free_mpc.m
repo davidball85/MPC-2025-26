@@ -112,11 +112,13 @@ try
     nexttile;
 
     d_true_of = local_build_disturbance_profile(Ccfg, size(logs_of.u,2));
-    plot(logs_of.t(1:end-1), d_true_of, logs_of.t(1:end-1), logs_of.dhat);
+    plot(logs_of.t(1:end-1), d_true_of, logs_of.t(1:end-1), -logs_of.dhat);
+
     grid on;
     xlabel('Time (s)'); ylabel('d (N)');
     title('Surge disturbance: true vs estimated (offset-free path)');
-    legend('true','estimated','Location','best');
+    legend('true','estimated (sign-corrected)','Location','best');
+
 
     out_png = fullfile(fileparts(mfilename('fullpath')), 'task3_check04_standard_vs_offsetfree.png');
     saveas(fig, out_png);

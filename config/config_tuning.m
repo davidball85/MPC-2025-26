@@ -60,4 +60,8 @@ T.soft.use_theta = true;
 % For target tracking slack (speed/depth)
 T.soft.use_track = true;
 
+% Task 3/4 options
+T.task3.use_wall = true;   % set false to disable wall constraint in offset-free MPC
+
+
 end

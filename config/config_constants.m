@@ -49,7 +49,7 @@ C.dist.enable = true;
 
 % Step disturbance used in Task 3 brief: -20N at t=10s (surge channel)
 C.dist.surge_step_time_s = 10;      % seconds
-C.dist.surge_step_N      = -20;     % Newtons (opposes motion)
+C.dist.surge_step_N      = +20;     % Newtons (opposes motion)
 
 % --- Compatibility aliases for runningchecks scripts ---
 C.dist.t_step_s = C.dist.surge_step_time_s;

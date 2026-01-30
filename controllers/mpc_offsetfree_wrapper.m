@@ -68,6 +68,17 @@ if isempty(MPC)
         x_abs = dx(:,k) + xss_p;
         u_abs = du(:,k) + uss_p;
 
+        % Optional virtual wall constraint (Task 3/4)
+        if isfield(T,'task3') && isfield(T.task3,'use_wall') && T.task3.use_wall
+            if isfield(C,'wall_stop_internal')
+                wall_stop = C.wall_stop_internal;
+            else
+                wall_stop = C.wall_stop;
+            end
+            cons = [cons, x_abs(C.idx.xp) <= wall_stop];
+        end
+
+
         % hard input constraints
         cons = [cons, C.u_min <= u_abs <= C.u_max];
 
