@@ -1,275 +1,273 @@
-function task4_animation_task3_cleanwater_FIXEDSHAPE()
-clc; close all;
+function out = task3_summary()
+% task3_summary
+%
+% Runs Task 3 checks AND generates a Task 3 logs struct for animation.
+%
+% Key behaviour:
+%   - Finds project root from THIS file's location (not from pwd).
+%   - Runs check_*.m in the same folder as this script (or in runningchecks/task3).
+%   - Generates logs using a noise-free measurement path by default,
+%     matching the typical runningchecks assumptions.
+%
+% Output:
+%   out.results, out.allPass, out.timestamp, out.projectRoot, out.logs
 
-%% ================= TOGGLES =================
-OPT.showInsets = false;
-OPT.makeVideo  = true;
+clc;
 
-%% ================= COLOURS =================
-COL.waterFig = [0.05 0.12 0.22];
-COL.waterAx  = [0.03 0.10 0.20];
-COL.grid     = [0.75 0.85 0.95];
-COL.white    = [1 1 1];
+out = struct();
+out.results = [];
+out.allPass = false;
+out.timestamp = datestr(now, 'yyyy-mm-dd HH:MM:SS');
+out.projectRoot = '';
+out.logs = [];
 
-COL.safeLine = [0.70 0.85 1.00];
-COL.wallLine = [1.00 0.85 0.40];
-COL.stopLine = [1.00 0.55 0.40];
+% =========================
+% Toggles
+% =========================
+OPT.runChecks       = true;
+OPT.generateLogs    = true;
+OPT.assignLogsBase  = true;
 
-BOX.face = [0 0 0];
-BOX.border = [0 0 0];
-BOX.captionAlpha = 0.55;
-BOX.telemetryAlpha = 0.45;
-BOX.borderW = 1.5;
+% IMPORTANT: default OFF to match your earlier "good" plots
+OPT.addMeasNoise    = false;
 
-%% ================= VIDEO RESOLUTION =================
-VIDEO.width  = 1920;
-VIDEO.height = 1080;
+% Starting depth for logs generation
+OPT.startDepth_m    = 5.0;
 
-%% ================= SETTINGS =================
-OPT.videoName  = 'Task4_Task3_Animation_CleanWater_FixedShape.mp4';
-OPT.fps       = 6;     % faster preview-friendly
-OPT.frameHold = 1;     % set to 9 for ~3 min export
-OPT.skip      = 1;
+% =========================
+% Determine folders robustly
+% =========================
+thisFile = mfilename('fullpath');
+thisDir  = fileparts(thisFile);
 
-OPT.auvL = 2.6;        % longer capsule looks more submarine-like
-OPT.auvH = 0.70;
+% If task3_summary.m is stored inside runningchecks/task3:
+% project root is two levels up from thisDir.
+% If it's stored at project root, thisDir IS project root.
+projCand1 = thisDir;
+projCand2 = fileparts(fileparts(thisDir));
 
-OPT.auvFace = [0.85 0.85 0.88];
-OPT.auvEdge = [0.10 0.10 0.15];
-OPT.auvEdgeW = 2.0;
-
-OPT.arrowScale_m_per_N = 0.03;
-OPT.flipDistArrow = false;
-
-u_ref = 1.0;
-z_ref = 5.0;
-DIST_STEP_TIME = 10.0;
-
-THR.uRecover  = 0.02;
-THR.dHatActive = 2.0;
-THR.depthWarn = 0.20;
-
-%% ================= LOAD CONSTANTS + LOGS =================
-C = config_constants();
-
-if ~evalin('base','exist(''logs'',''var'')')
-    logs = task3_main();
+% Prefer the candidate that actually contains runningchecks/task3
+if exist(fullfile(projCand1, 'runningchecks', 'task3'), 'dir') == 7
+    projRoot = projCand1;
+elseif exist(fullfile(projCand2, 'runningchecks', 'task3'), 'dir') == 7
+    projRoot = projCand2;
 else
-    logs = evalin('base','logs');
+    % fallback: use pwd
+    projRoot = pwd;
 end
 
-t     = logs.t(:);
-x     = logs.x;
-dhat  = logs.dhat(:);
-uss   = logs.uss;
+out.projectRoot = projRoot;
 
-xp    = x(C.idx.xp,:).';
-zp    = x(C.idx.zp,:).';
-theta = x(C.idx.theta,:).';
-uSur  = x(C.idx.u,:).';
-wHea  = x(C.idx.w,:).';
-
-if numel(dhat) < numel(t), dhat_plot = [dhat; dhat(end)];
-else, dhat_plot = dhat(1:numel(t)); end
-
-if size(uss,2) < numel(t), uss_plot = [uss, uss(:,end)];
-else, uss_plot = uss(:,1:numel(t)); end
-
-%% ================= BUILD A STABLE CAPSULE (CLOCKWISE, CLOSED) =================
-L = OPT.auvL;
-H = OPT.auvH;
-r = H/2;
-
-% Straight section half-length (excluding round ends)
-a = (L/2) - r;
-if a <= 0
-    error('AUV length must be greater than height so capsule has a straight section.');
+% Checks folder:
+% If this file lives alongside check_*.m, use thisDir.
+% Otherwise use <projRoot>/runningchecks/task3.
+if ~isempty(dir(fullfile(thisDir,'check_*.m')))
+    checksFolder = thisDir;
+else
+    checksFolder = fullfile(projRoot, 'runningchecks', 'task3');
 end
 
-nArc = 60;
+fprintf('============================================\n');
+fprintf('RUNNING TASK 3 CHECKS (%s)\n', out.timestamp);
+fprintf('Project: MPC 2025-26\n');
+fprintf('Project root: %s\n', out.projectRoot);
+fprintf('Checks folder: %s\n', checksFolder);
+fprintf('============================================\n\n');
 
-% Nose (right) semicircle: top -> bottom (clockwise)
-angNose = linspace(pi/2, -pi/2, nArc);
-noseArc = [ a + r*cos(angNose(:)), 0 + r*sin(angNose(:)) ];
-
-% Tail (left) semicircle: bottom -> top (clockwise)
-angTail = linspace(-pi/2, pi/2, nArc);
-tailArc = [ -a + r*cos(angTail(:)), 0 + r*sin(angTail(:)) ];
-
-% Assemble clockwise:
-% start at nose top, go down nose arc to nose bottom,
-% then straight along bottom to tail bottom,
-% then up tail arc to tail top,
-% then straight along top back to nose top.
-bottomLine = [ linspace(a, -a, 20).', -r*ones(20,1) ];
-topLine    = [ linspace(-a, a, 20).',  r*ones(20,1) ];
-
-capsuleLocal = [ noseArc; bottomLine; tailArc; topLine ];
-capsuleLocal = [capsuleLocal; capsuleLocal(1,:)]; % close polygon
-
-noseTipLocal = [a + r, 0];  % absolute nose tip (furthest +x)
-
-%% ================= MAIN FIGURE =================
-fig = figure( ...
-    'Color', COL.waterFig, ...
-    'Name', 'Task 4 Animation', ...
-    'NumberTitle', 'off', ...
-    'Units', 'pixels', ...
-    'Position', [100 100 VIDEO.width VIDEO.height], ...
-    'Resize', 'off' );
-
-ax  = axes(fig);
-hold(ax,'on');
-set(ax,'Color', COL.waterAx);
-grid(ax,'on');
-
-ax.GridAlpha = 0.18;
-ax.GridColor = COL.grid;
-ax.XColor = COL.white;
-ax.YColor = COL.white;
-
-xlabel(ax,'x_p (m)','Color',COL.white);
-ylabel(ax,'z_p (m) [depth]','Color',COL.white);
-title(ax,'AUV Animation (Task 3)','Color',COL.white);
-set(ax,'YDir','reverse');
-
-padX = 8; padZ = 2;
-xmin = min(xp) - padX;
-xmax = max([max(xp), C.wall_xp]) + padX;
-zmin = min([min(zp), C.zp_min]) - padZ;
-zmax = max([max(zp), C.zp_max]) + padZ;
-axis(ax, [xmin xmax zmin zmax]);
-
-plot(ax, [xmin xmax], [C.zp_min C.zp_min], '--', 'LineWidth', 1.2, 'Color', COL.safeLine);
-plot(ax, [xmin xmax], [C.zp_max C.zp_max], '--', 'LineWidth', 1.2, 'Color', COL.safeLine);
-plot(ax, [C.wall_xp C.wall_xp], [zmin zmax], '-',  'LineWidth', 1.4, 'Color', COL.wallLine);
-plot(ax, [C.wall_stop C.wall_stop], [zmin zmax], '--', 'LineWidth', 1.4, 'Color', COL.stopLine);
-
-%% ================= AUV + ARROW =================
-auvPatch = patch(ax, nan, nan, OPT.auvFace, ...
-    'EdgeColor', OPT.auvEdge, 'LineWidth', OPT.auvEdgeW);
-
-% Nose indicator (triangle) always at nose tip
-noseTri = patch(ax, nan, nan, [1 0.6 0.2], 'EdgeColor','none');
-
-distArrow = quiver(ax, nan, nan, nan, nan, ...
-    'LineWidth', 2, 'MaxHeadSize', 3, 'Color', [0.95 0.95 0.95]);
-
-%% ================= CAPTION + TELEMETRY =================
-xRange = xmax - xmin; zRange = zmax - zmin;
-
-capX = xmin + 0.02*xRange; capY = zmin + 0.02*zRange;
-capW = 0.82*xRange;        capH = 0.12*zRange;
-telX = capX;               telY = capY + capH + 0.012*zRange;
-telW = 0.50*xRange;        telH = 0.18*zRange;
-
-captionRect = rectangle(ax,'Position',[capX capY capW capH], ...
-    'FaceColor',BOX.face,'EdgeColor',BOX.border,'LineWidth',BOX.borderW);
-captionRect.FaceAlpha = BOX.captionAlpha;
-
-telemetryRect = rectangle(ax,'Position',[telX telY telW telH], ...
-    'FaceColor',BOX.face,'EdgeColor',BOX.border,'LineWidth',BOX.borderW);
-telemetryRect.FaceAlpha = BOX.telemetryAlpha;
-
-captionText = text(ax, capX + 0.012*xRange, capY + 0.012*zRange, '', ...
-    'Color',COL.white,'FontSize',12,'FontWeight','bold', ...
-    'VerticalAlignment','top','Interpreter','none');
-
-telemetryText = text(ax, telX + 0.012*xRange, telY + 0.012*zRange, '', ...
-    'Color',COL.white,'FontSize',10, ...
-    'VerticalAlignment','top','Interpreter','none');
-
-%% ================= VIDEO WRITER =================
-if OPT.makeVideo
-    vw = VideoWriter(OPT.videoName,'MPEG-4');
-    vw.FrameRate = OPT.fps;
-    open(vw);
+% Run from project root so relative save paths match old behaviour
+origPwd = pwd;
+cleanupObj = onCleanup(@() cd(origPwd));
+if exist(projRoot,'dir') == 7
+    cd(projRoot);
 end
 
-%% ================= ANIMATE =================
-K = numel(t);
+% =========================
+% (A) Run checks
+% =========================
+if OPT.runChecks && exist(checksFolder,'dir') == 7
+    addpath(checksFolder);
 
-for k = 1:OPT.skip:K
-    tk = t(k);
-
-    th = theta(k);
-    R  = [cos(th) -sin(th); sin(th) cos(th)];
-
-    pts = (R * capsuleLocal.').';
-    Xp = pts(:,1) + xp(k);
-    Zp = pts(:,2) + zp(k);
-    set(auvPatch,'XData',Xp,'YData',Zp);
-
-    % Nose triangle oriented with theta at nose tip
-    noseW = (R * noseTipLocal.').';
-    nx = noseW(1) + xp(k);
-    nz = noseW(2) + zp(k);
-
-    fwd = [cos(th), sin(th)];
-    left = [-sin(th), cos(th)];
-
-    triSize = 0.18;
-    p1 = [nx, nz];
-    p2 = p1 - triSize*fwd + 0.7*triSize*left;
-    p3 = p1 - triSize*fwd - 0.7*triSize*left;
-
-    set(noseTri,'XData',[p1(1) p2(1) p3(1)], 'YData',[p1(2) p2(2) p3(2)]);
-
-    dx = OPT.arrowScale_m_per_N * dhat_plot(k);
-    if OPT.flipDistArrow, dx = -dx; end
-    set(distArrow,'XData',xp(k),'YData',zp(k),'UData',dx,'VData',0);
-
-    disturbanceNowActive = (tk >= DIST_STEP_TIME);
-    inStepWindow = abs(tk - DIST_STEP_TIME) <= 1.5;
-
-    nearDepthConstraint = (zp(k) < C.zp_min + THR.depthWarn) || (zp(k) > C.zp_max - THR.depthWarn);
-    speedRecovered = abs(uSur(k) - u_ref) < THR.uRecover;
-    dhatActive = abs(dhat_plot(k)) > THR.dHatActive;
-
-    if inStepWindow
-        headline = 'Disturbance now active: unknown opposing surge force applied.';
-    elseif disturbanceNowActive && dhatActive && ~speedRecovered
-        headline = 'Observer estimating disturbance; offset-free MPC compensating.';
-    elseif disturbanceNowActive && speedRecovered
-        headline = 'Compensation successful: speed recovered with ~zero steady-state error.';
+    checkFiles = dir(fullfile(checksFolder, 'check_*.m'));
+    if isempty(checkFiles)
+        warning('No check_*.m files found in %s', checksFolder);
     else
-        headline = 'Nominal tracking: MPC regulating speed and depth within constraints.';
-    end
+        [~,ix] = sort({checkFiles.name});
+        checkFiles = checkFiles(ix);
 
-    if nearDepthConstraint
-        conTxt = 'Depth constraint active: staying inside safe band.';
-    else
-        conTxt = 'Constraints satisfied: depth within safe band.';
-    end
+        results = repmat(struct('name','','pass',false,'notes',{{}},'error',''), 1, numel(checkFiles));
 
-    if disturbanceNowActive
-        distTxt = sprintf('dHat=%.1f N, uSS_surge=%.1f', dhat_plot(k), uss_plot(1,k));
-    else
-        distTxt = sprintf('Awaiting disturbance step at t=%.0f s', DIST_STEP_TIME);
-    end
+        for i = 1:numel(checkFiles)
+            fname = checkFiles(i).name;
+            [~, fcn] = fileparts(fname);
 
-    captionText.String = sprintf('%s\n%s  %s', headline, conTxt, distTxt);
+            fprintf('--------------------------------------------\n');
+            fprintf('(%d/%d) %s\n', i, numel(checkFiles), fname);
+            fprintf('--------------------------------------------\n');
 
-    telemetryText.String = sprintf([ ...
-        't=%.1fs   x=%.2fm   z=%.2fm\n' ...
-        'u=%.2fm/s   w=%.2fm/s\n' ...
-        'pitch=%.1fdeg   dHat=%.1fN\n' ...
-        'uSS_surge=%.1f'], ...
-        tk, xp(k), zp(k), uSur(k), wHea(k), rad2deg(th), dhat_plot(k), uss_plot(1,k));
+            try
+                R = feval(fcn);
 
-    drawnow;
+                results(i).name = fname;
+                results(i).pass = isfield(R,'pass') && logical(R.pass);
+                if isfield(R,'notes'), results(i).notes = R.notes; end
+                if isfield(R,'error'), results(i).error = R.error; end
 
-    if OPT.makeVideo
-        fr = getframe(fig);
-        for rHold = 1:OPT.frameHold
-            writeVideo(vw, fr);
+                if results(i).pass
+                    fprintf('Result: PASS\n');
+                else
+                    fprintf('Result: FAIL\n');
+                    if ~isempty(results(i).error)
+                        fprintf('  Error: %s\n', results(i).error);
+                    end
+                end
+
+                if ~isempty(results(i).notes)
+                    for k = 1:numel(results(i).notes)
+                        fprintf('  - %s\n', results(i).notes{k});
+                    end
+                end
+
+            catch ME
+                results(i).name  = fname;
+                results(i).pass  = false;
+                results(i).error = ME.message;
+
+                fprintf('Result: FAIL\n');
+                fprintf('  Error: %s\n', ME.message);
+                fprintf('  Suggested next step:\n');
+                fprintf('    - Open %s and fix the reported issue.\n', fname);
+                fprintf('    - Re-run task3_summary.\n');
+            end
+
+            fprintf('\n');
+        end
+
+        out.results = results;
+        out.allPass = all([results.pass]);
+
+        if out.allPass
+            fprintf('============================================\n');
+            fprintf('TASK 3 CHECK SUMMARY: ALL PASS\n');
+            fprintf('============================================\n\n');
+        else
+            fprintf('============================================\n');
+            fprintf('TASK 3 CHECK SUMMARY: FAILURES PRESENT\n');
+            fprintf('============================================\n\n');
         end
     end
 end
 
-if OPT.makeVideo
-    close(vw);
-    fprintf('Saved video: %s\n', fullfile(pwd, OPT.videoName));
+% =========================
+% (B) Generate logs for animation
+% =========================
+if OPT.generateLogs
+    logs = local_run_task3_sim(OPT.startDepth_m, OPT.addMeasNoise);
+    out.logs = logs;
+
+    if OPT.assignLogsBase
+        assignin('base','logs',logs);
+        fprintf('Assigned logs to base workspace as variable: logs\n');
+    end
+end
+
+end
+
+% =====================================================================
+function logs = local_run_task3_sim(startDepth_m, addMeasNoise)
+
+C = config_constants();
+T = config_tuning();
+
+% Linear + discretise
+[Ac, Bc, Cmeas, Dc] = auv_linearise(C);
+[Ad, Bd, ~, ~]      = auv_discretise(Ac, Bc, Cmeas, Dc, C.Ts);
+
+% Augmented model
+[A_aug, B_aug, C_aug, Bw] = auv_build_augmented_model(Ad, Bd, Cmeas);
+
+model.A  = Ad;
+model.B  = Bd;
+model.Bw = Bw;
+model.Cy = Cmeas;
+
+% KF init (must exist in your project)
+est = kalman_augmented_init(A_aug, B_aug, C_aug, T);
+
+x_ref = T.x_ref_task3(:);
+u_eq  = auv_equilibrium(x_ref, C);
+
+Tend = 80;
+K    = round(Tend / C.Ts);
+t    = (0:K)' * C.Ts;
+
+% initial state
+x = zeros(6,1);
+x(C.idx.zp) = startDepth_m;
+
+% true disturbance profile
+d_true = C.dist.surge_bias_N * ones(K,1);
+if isfield(C,'dist') && isfield(C.dist,'enable') && C.dist.enable
+    k_step = round(C.dist.surge_step_time_s / C.Ts) + 1;
+    k_step = max(1, min(K, k_step));
+    d_true(k_step:end) = C.dist.surge_step_N;
+end
+
+% logs
+logs.t = t;
+logs.x = zeros(6,K+1); logs.x(:,1) = x;
+logs.u = zeros(3,K);
+logs.y = zeros(2,K);
+logs.xhat = zeros(6,K);
+logs.dhat = zeros(1,K);
+logs.uss = zeros(3,K);
+logs.d_true = d_true;
+
+for k = 1:K
+    y_true = Cmeas*x;
+
+    % DEFAULT: no noise, matches typical runningchecks assumptions
+    y = y_true;
+
+    if addMeasNoise
+        if isfield(T,'kf') && isfield(T.kf,'R') && all(size(T.kf.R)==[2 2])
+            v = [sqrt(T.kf.R(1,1))*randn; sqrt(T.kf.R(2,2))*randn];
+            y = y_true + v;
+        end
+    end
+
+    if k == 1
+        u_prev = u_eq;
+    else
+        u_prev = logs.u(:,k-1);
+    end
+
+    est = kalman_augmented_step(est, u_prev, y);
+
+    x_hat = est.xhat(1:6);
+    d_hat = est.xhat(end);
+
+    OUT = mpc_offsetfree_wrapper(x_hat, d_hat, x_ref, model, C, T);
+    u_cmd = OUT.u_cmd;
+
+    C.d_surge = d_true(k);
+    x = auv_step_nonlinear(x, u_cmd, C);
+
+    logs.u(:,k) = u_cmd;
+    logs.y(:,k) = y;
+    logs.x(:,k+1) = x;
+    logs.xhat(:,k) = x_hat;
+    logs.dhat(k) = d_hat;
+    logs.uss(:,k) = OUT.u_ss;
+end
+
+% For animation: provide a "physically interpretable" version too
+logs.dhat_phys = logs.dhat;
+tailN = min(60, numel(logs.dhat));
+dhat_tail = mean(logs.dhat(end-tailN+1:end));
+stepSign = sign(C.dist.surge_step_N);
+if stepSign == 0, stepSign = 1; end
+if sign(dhat_tail) ~= stepSign
+    logs.dhat_phys = -logs.dhat_phys;
 end
 
 end
