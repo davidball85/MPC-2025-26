@@ -1,4 +1,4 @@
-function [Ac, Bc, Cc, Dc] = auv_linearise(C)
+function varargout = auv_linearise(C)
 % auv_linearise
 % Computes continuous-time linearised model:
 %   x_dot = Ac x + Bc u
@@ -6,6 +6,10 @@ function [Ac, Bc, Cc, Dc] = auv_linearise(C)
 %
 % State:  x = [u; w; q; xp; zp; theta]
 % Input:  u = [Tsurge; Theave; taupitch]
+%
+% IMPORTANT (Task 3):
+%   Measured outputs should be y = [u; zp] so the disturbance estimate is
+%   properly observable from speed + depth (not from position).
 
 % Equilibrium state and input
 x_eq = C.x_eq;
@@ -66,11 +70,23 @@ Bc(2,2) = 1/mz;
 Bc(3,3) = 1/Iy;
 
 %% --------- Output matrices (measurement model) ---------
-% Measured outputs: y = [xp; zp]
-
+% Measured outputs: y = [u; zp]
 Cc = zeros(2,6);
-Cc(1,4) = 1;   % xp
+Cc(1,1) = 1;   % u
 Cc(2,5) = 1;   % zp
 
 Dc = zeros(2,3);
+
+% ---- Backward compatible outputs ----
+if nargout<=1
+    lin = struct('Ac',Ac,'Bc',Bc,'Cc',Cc,'Dc',Dc);
+    varargout{1}=lin;
+elseif nargout==2
+    varargout{1}=Ac; varargout{2}=Bc;
+elseif nargout==4
+    varargout{1}=Ac; varargout{2}=Bc; varargout{3}=Cc; varargout{4}=Dc;
+else
+    error('auv_linearise:BadNargout','Unsupported nargout=%d', nargout);
+end
+
 end

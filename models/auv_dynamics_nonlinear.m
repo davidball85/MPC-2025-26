@@ -1,25 +1,27 @@
 function xdot = auv_dynamics_nonlinear(x, u_ctrl, C)
 % auv_dynamics_nonlinear
-% Implements the nonlinear AUV model from the coursework brief:
-% x = [u; w; q; xp; zp; theta]
-% u_ctrl = [Tsurge; Theave; taupitch]
 %
-% Equations (1)-(6) in the brief: :contentReference[oaicite:2]{index=2}
+% State:  x = [u; w; q; xp; zp; theta]
+% Input:  u_ctrl = [Tsurge; Theave; taupitch]
+%
+% DISTURBANCE CONVENTION (Task 3/4):
+%   C.d_surge [N] is an external surge force added to the surge force balance.
+%   Therefore:
+%       d_surge = -20 N  --> opposes forward motion (push-back)
+%       d_surge = +20 N  --> assists forward motion (push-forward)
 
 % --- Unpack states ---
-u     = x(1);   % surge velocity (body) [m/s]
-w     = x(2);   % heave velocity (body) [m/s]
-q     = x(3);   % pitch rate [rad/s]
-xp    = x(4);   %#ok<NASGU> % inertial x position [m]
-zp    = x(5);   %#ok<NASGU> % depth [m]
-theta = x(6);   % pitch angle [rad]
+u     = x(1);
+w     = x(2);
+q     = x(3);
+theta = x(6);
 
 % --- Unpack inputs ---
-Tsurge   = u_ctrl(1);   % [N]
-Theave   = u_ctrl(2);   % [N]
-taupitch = u_ctrl(3);   % [Nm]
+Tsurge   = u_ctrl(1);
+Theave   = u_ctrl(2);
+taupitch = u_ctrl(3);
 
-% --- Shorthand params ---
+% --- Params ---
 mx    = C.mx;
 mz    = C.mz;
 Iy    = C.Iy;
@@ -28,24 +30,20 @@ Dw    = C.Dw;
 Dq    = C.Dq;
 Mrest = C.Mrest;
 
-% --- Optional input disturbance (Task 3) ---
+% --- Disturbance ---
 d_surge = 0;
 if isfield(C,'d_surge')
-    d_surge = C.d_surge;   % surge disturbance force [N]
+    d_surge = C.d_surge;
 end
 
-% --- DEBUG: disturbance sign check (temporary) ---
-%fprintf('d=%.1f  udot_contrib=%.3f\n', d_surge, d_surge/mx);
+% --- Dynamics ---
+udot = (1/mx) * (Tsurge + d_surge - Du*u*abs(u));
+wdot = (1/mz) * (Theave          - Dw*w*abs(w));
+qdot = (1/Iy) * (taupitch        - Dq*q*abs(q) - Mrest*sin(theta));
 
-% --- Nonlinear dynamics (brief Eq. 1-6) ---
-udot = (1/mx) * (Tsurge - d_surge - Du * u * abs(u));               % (1)
-wdot = (1/mz) * (Theave - Dw * w * abs(w));                         % (2)
-qdot = (1/Iy) * (taupitch - Dq * q * abs(q) - Mrest * sin(theta));  % (3)
+xpdot    = u*cos(theta) + w*sin(theta);
+zpdot    = -u*sin(theta) + w*cos(theta);
+thetadot = q;
 
-xpdot = u * cos(theta) + w * sin(theta);                            % (4)
-zpdot = -u * sin(theta) + w * cos(theta);                           % (5)
-thetadot = q;                                                       % (6)
-
-% --- Pack derivative ---
 xdot = [udot; wdot; qdot; xpdot; zpdot; thetadot];
 end

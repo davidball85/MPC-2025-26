@@ -1,251 +1,168 @@
-function R = check_04_offset_free_mpc()
-% check_04_offset_free_mpc
-%
-% Purpose
-%   Runs the full Task 3 simulation (offset-free MPC) and exports report-ready plots.
-%   Adds a *baseline* comparison against the standard MPC (Task 2 controller) under
-%   the same surge disturbance step.
-%
-% What this adds (extra info for write-up)
-%   - Standard vs Offset-Free speed tracking after a constant disturbance
-%   - Steady-state speed error metrics for both controllers
-%   - Control effort (surge thrust) comparison
-%
-% Outputs
-%   R.pass, R.notes, R.error
+function result = check_04_offset_free_mpc()
+% CHECK_04_OFFSET_FREE_MPC
+% Runs offset-free MPC simulation and verifies zero steady-state error.
+% All parameters are taken from config files.
 
-R = struct('pass', false, 'notes', {{}}, 'error', '');
+C = config_constants();
+T = config_tuning();
 
+fprintf('\n============================================================\n');
+fprintf('  TASK 3 - CHECK 04: OFFSET-FREE MPC SIMULATION\n');
+fprintf('============================================================\n');
+
+% Build/discretise model
+lin = auv_linearise(C);
+mdl = auv_discretise(lin, C.Ts);
+
+% Measurement matrix y=[xp;zp]
+mdl.Cy = zeros(2,6);
+mdl.Cy(1, C.idx.xp) = 1;
+mdl.Cy(2, C.idx.zp) = 1;
+
+mdl.Bw = mdl.B(:,1);
+if isfield(C,'dist') && isfield(C.dist,'channel')
+    mdl.Bw = mdl.B(:,C.dist.channel);
+end
+
+% Augment + KF
+Maug = auv_build_augmented_model(mdl, C, T);
+KF = kalman_augmented_init(Maug, C, T);
+
+% Run sim using shared logic from task3_summary (local copy here to keep check independent)
+OUT = local_run(LOG_dummy(), mdl, Maug, KF, C, T);
+
+% Metrics
+ss_err = OUT.metrics.ss_err_of;
+
+fprintf('\n[Verdict]\n');
+fprintf('  Offset-free final speed: %.4f (ref %.4f) |ss err|=%.6f\n', OUT.final.u_of, OUT.ref.u, ss_err);
+
+% Plot
 try
-    Ccfg = config_constants();
-    Tcfg = config_tuning();
-
-    % ----------------------------
-    % (A) Offset-free MPC run (Task 3 main)
-    % ----------------------------
-    logs_of = task3_main();  % produces task3_main_results.png as before
-
-    u_ref  = Tcfg.x_ref_task3(Ccfg.idx.u);
-    u_of_final = logs_of.x(Ccfg.idx.u, end);
-    ss_err_of  = abs(u_of_final - u_ref);
-
-    R.notes{end+1} = sprintf('Offset-free MPC final speed: %.4f m/s (ref %.2f), |ss err| = %.4g', ...
-        u_of_final, u_ref, ss_err_of);
-
-    % ----------------------------
-    % (B) Standard MPC baseline under same disturbance
-    % ----------------------------
-    logs_std = local_run_standard_mpc_with_disturbance(Ccfg, Tcfg);
-
-    u_std_final = logs_std.x(Ccfg.idx.u, end);
-    ss_err_std  = abs(u_std_final - u_ref);
-
-    R.notes{end+1} = sprintf('Standard MPC final speed:    %.4f m/s (ref %.2f), |ss err| = %.4g', ...
-        u_std_final, u_ref, ss_err_std);
-
-    % ----------------------------
-    % (C) Metrics after the disturbance step
-    % ----------------------------
-    k_step = round(Ccfg.dist.surge_step_time_s / Ccfg.Ts) + 1;
-
-    % Use last 10 seconds for "steady-state"
-    K_of  = size(logs_of.x,2) - 1;
-    K_std = size(logs_std.x,2) - 1;
-    n_tail_of  = min(round(10 / Ccfg.Ts), K_of);
-    n_tail_std = min(round(10 / Ccfg.Ts), K_std);
-
-    u_of_tail  = logs_of.x(Ccfg.idx.u, end-n_tail_of:end);
-    u_std_tail = logs_std.x(Ccfg.idx.u, end-n_tail_std:end);
-
-    ss_mean_of  = mean(u_of_tail);
-    ss_mean_std = mean(u_std_tail);
-
-    R.notes{end+1} = sprintf('Steady-state mean speed (last 10s): offset-free=%.4f, standard=%.4f (ref %.2f).', ...
-        ss_mean_of, ss_mean_std, u_ref);
-
-    % Basic settling time after the step (to within +/-2%% of ref)
-    band = 0.02 * abs(u_ref);
-    Ts_of  = local_settling_time(logs_of.t, logs_of.x(Ccfg.idx.u,:), k_step, u_ref, band);
-    Ts_std = local_settling_time(logs_std.t, logs_std.x(Ccfg.idx.u,:), k_step, u_ref, band);
-
-    if isfinite(Ts_of)
-        R.notes{end+1} = sprintf('Settling time (±2%% band, after step): offset-free ~ %.2f s.', Ts_of);
-    else
-        R.notes{end+1} = 'Settling time (±2% band, after step): offset-free did not settle within sim horizon.';
-    end
-
-    if isfinite(Ts_std)
-        R.notes{end+1} = sprintf('Settling time (±2%% band, after step): standard    ~ %.2f s.', Ts_std);
-    else
-        R.notes{end+1} = 'Settling time (±2% band, after step): standard did not settle within sim horizon.';
-    end
-
-    R.notes{end+1} = sprintf('Disturbance step: %.1f N at t=%.1f s (from config).', ...
-        Ccfg.dist.surge_step_N, Ccfg.dist.surge_step_time_s);
-
-    % ----------------------------
-    % (D) Comparison plot: Standard vs Offset-Free
-    % ----------------------------
-    fig = figure(340); clf(fig);
-    fig.Name = 'Task3 Check 04: Standard vs Offset-Free MPC comparison';
-    fig.NumberTitle = 'off';
-
-    tiledlayout(fig, 3, 1);
-
-    % Speed
-    nexttile;
-    plot(logs_of.t, logs_of.x(Ccfg.idx.u,:), logs_std.t, logs_std.x(Ccfg.idx.u,:));
+    f = figure('Name','Task3 Check04','Color','w');
+    plot(OUT.t, OUT.u_of); hold on;
+    plot(OUT.t, OUT.u_std);
+    yline(OUT.ref.u,'--');
+    xlabel('Time [s]'); ylabel('Surge speed u [m/s]');
+    legend('Offset-free','Standard','Reference','Location','best');
     grid on;
-    ylabel('u (m/s)');
-    title('Speed tracking under constant surge disturbance');
-    legend('offset-free MPC','standard MPC','Location','best');
 
-    % Surge thrust
-    nexttile;
-    plot(logs_of.t(1:end-1), logs_of.u(1,:), logs_std.t(1:end-1), logs_std.u(1,:));
-    grid on;
-    ylabel('T_{surge} (N)');
-    title('Surge thrust input (channel 1)');
-    legend('offset-free MPC','standard MPC','Location','best');
-
-    % Disturbance estimate + step marker
-    nexttile;
-
-    d_true_of = local_build_disturbance_profile(Ccfg, size(logs_of.u,2));
-    plot(logs_of.t(1:end-1), d_true_of, logs_of.t(1:end-1), -logs_of.dhat);
-
-    grid on;
-    xlabel('Time (s)'); ylabel('d (N)');
-    title('Surge disturbance: true vs estimated (offset-free path)');
-    legend('true','estimated (sign-corrected)','Location','best');
-
-
-    out_png = fullfile(fileparts(mfilename('fullpath')), 'task3_check04_standard_vs_offsetfree.png');
-    saveas(fig, out_png);
-    R.notes{end+1} = ['Saved plot: ', out_png];
-
-    % ----------------------------
-    % (E) Pass / fail condition (Task 3 requirement)
-    % ----------------------------
-    if ss_err_of < 0.02
-        R.notes{end+1} = 'PASS criterion: offset-free speed steady-state error < 0.02 m/s.';
-        R.pass = true;
-    else
-        R.notes{end+1} = 'FAIL criterion: offset-free speed steady-state error not small enough.';
-        R.pass = false;
-    end
-
+    outpath = fullfile(C.project_root, 'runningchecks', 'task3', 'task3_check04_comparison.png');
+    local_save_figure(f, outpath);
+    fprintf('  ✓ Saved comparison plot: %s\n', outpath);
 catch ME
-    R.pass  = false;
-    R.error = ME.message;
+    fprintf('  ⚠ Plot save failed: %s\n', ME.message);
 end
 
+tol = 0.01; % still a criterion, but derive from config if you add it
+if isfield(C.Task3,'check04_ss_tol')
+    tol = C.Task3.check04_ss_tol;
 end
 
-% =====================================================================
-function logs = local_run_standard_mpc_with_disturbance(C, T)
-% Runs the standard MPC controller (Task 2 style) on the nonlinear plant,
-% under the same surge disturbance profile used in Task 3.
-%
-% Notes:
-% - Uses full state feedback x(k) as the "measured state" (same assumption as Task 2).
-% - Uses the same reference vector as Task 3 (T.x_ref_task3).
-% - Disturbance is applied through C.d_surge each time step (no hard-coding).
-
-% Prevent stale YALMIP optimiser state causing odd behaviour
-yalmip('clear');
-
-% Keep solver quiet in running checks
-if isfield(T,'verbose')
-    T.verbose = 0;
+if ss_err < tol
+    fprintf('\n  ✓✓✓ CHECK 04: PASS ✓✓✓\n');
+    result = struct('pass', true, 'ss_err', ss_err);
+else
+    fprintf('\n  ✗✗✗ CHECK 04: FAIL ✗✗✗\n');
+    fprintf('  Offset-free MPC did not achieve zero steady-state error.\n');
+    result = struct('pass', false, 'ss_err', ss_err);
+end
 end
 
-% Build linear model
-[Ac, Bc, Cmeas, Dc] = auv_linearise(C);
-[Ad, Bd, ~, ~]      = auv_discretise(Ac, Bc, Cmeas, Dc, C.Ts);
+function OUT = local_run(LOG, mdl, Maug, KF, C, T) %#ok<INUSD>
+% Minimal copy of the simulation loop from task3_summary
 
-% References (Task 3)
-x_ref = T.x_ref_task3(:);
-u_ref = auv_equilibrium(x_ref, C);
+Ts = C.Ts;
+t_end = C.Task3.sim_time;
+Nsim = round(t_end/Ts);
 
-% Build MPC optimiser
-M = mpc_standard_build(Ad, Bd, x_ref, u_ref, C, T);
+x_ref = zeros(6,1);
+x_ref(C.idx.u)  = C.Task3.reference_speed;
+x_ref(C.idx.zp) = C.Task3.reference_depth;
 
-% Simulation setup
-Tend = 80;
-K    = round(Tend / C.Ts);
+x_true = C.Task3.initial_state(:);
 
-t = (0:K)' * C.Ts;
+u_eq = zeros(3,1);
+if isfield(C,'eq') && isfield(C.eq,'u_eq'), u_eq = C.eq.u_eq(:); end
+if isfield(C,'Task1') && isfield(C.Task1,'u_eq'), u_eq = C.Task1.u_eq(:); end
+if isfield(C,'u_eq'), u_eq = C.u_eq(:); end
 
-x = zeros(6,1);
-x(C.idx.zp) = C.zp_min;
+d = C.Task3.disturbance_bias;
+d_step = C.Task3.disturbance_step_magnitude;
+t_step = C.Task3.disturbance_step_time;
 
-% Disturbance profile
-d_true = local_build_disturbance_profile(C, K);
+MPC_std = mpc_standard_build(mdl, C, T);
 
-% Logs
-logs.t = t;
-logs.x = zeros(6, K+1); logs.x(:,1) = x;
-logs.u = zeros(3, K);
-logs.du = zeros(3, K);
-logs.err = zeros(1, K);
+t = (0:Nsim-1)'*Ts;
+u_of = zeros(Nsim,1);
+d_hat_log = zeros(Nsim,1);
 
-for k = 1:K
-    % Apply disturbance
-    C.d_surge = d_true(k);
+x_true_std = x_true;
+u_std_track = zeros(Nsim,1);
 
-    % Solve MPC (silently)
-    evalc('[u_cmd, du_cmd, err] = mpc_standard_solve(M, x, x_ref, u_ref);');
+KF_std = KF;
 
-    % Saturate as safety net (constraints should already enforce)
-    u_cmd = min(max(u_cmd, C.u_min), C.u_max);
-
-    % Nonlinear step
-    x = auv_step_nonlinear(x, u_cmd, C);
-
-    % Log
-    logs.u(:,k) = u_cmd;
-    logs.du(:,k) = du_cmd;
-    logs.err(k) = err;
-    logs.x(:,k+1) = x;
-end
-
-end
-
-% =====================================================================
-function d_true = local_build_disturbance_profile(C, K)
-% Returns K-by-1 disturbance profile (surge channel).
-
-d_true = C.dist.surge_bias_N * ones(K,1);
-
-if C.dist.enable
-    k_step = round(C.dist.surge_step_time_s / C.Ts) + 1;
-    k_step = max(1, min(K, k_step));
-    d_true(k_step:end) = C.dist.surge_step_N;
-end
-
-end
-
-% =====================================================================
-function Ts_settle = local_settling_time(t, u_traj, k_step, u_ref, band)
-% Settling time after k_step: first time index where u stays within band.
-
-Ts_settle = inf;
-
-if k_step < 1 || k_step > numel(u_traj)
-    return
-end
-
-idx = k_step:numel(u_traj);
-
-within = abs(u_traj(idx) - u_ref) <= band;
-
-% Find first index after step such that all remaining samples are within band
-for k = 1:numel(within)
-    if all(within(k:end))
-        Ts_settle = t(idx(k)) - t(k_step);
-        return
+for k=1:Nsim
+    tk = t(k);
+    if C.Task3.disturbance_enable && tk >= t_step
+        d = d_step;
     end
+
+    y = mdl.Cy*x_true;
+    if k==1, u_prev = u_eq; else, u_prev = u_cmd_of; end
+    [KF,~] = kalman_augmented_step(KF, u_prev, y);
+    x_hat = KF.x_hat(1:6);
+    d_hat = KF.x_hat(7);
+
+    OUT_of = mpc_offsetfree_wrapper(x_hat, d_hat, x_ref, mdl, C, T);
+    u_cmd_of = OUT_of.u_cmd(:);
+
+    x_true = auv_step_nonlinear(x_true, u_cmd_of, d, Ts, C);
+    u_of(k) = x_true(C.idx.u);
+    d_hat_log(k) = d_hat;
+
+    % standard path
+    y_std = mdl.Cy*x_true_std;
+    if k==1, u_prev_std=u_eq; else, u_prev_std = u_cmd_std; end
+    [KF_std,~] = kalman_augmented_step(KF_std, u_prev_std, y_std);
+    x_hat_std = KF_std.x_hat(1:6);
+    OUT_std = mpc_standard_solve(MPC_std, x_hat_std, x_ref, C, T);
+    u_cmd_std = OUT_std.u_cmd(:);
+
+    x_true_std = auv_step_nonlinear(x_true_std, u_cmd_std, d, Ts, C);
+    u_std_track(k) = x_true_std(C.idx.u);
 end
 
+ss_win = max(1, round(C.Task3.steady_state_window / Ts));
+idx_ss = (Nsim-ss_win+1):Nsim;
+u_of_ss = mean(u_of(idx_ss), 'omitnan');
+
+OUT = struct();
+OUT.t = t;
+OUT.u_of = u_of;
+OUT.u_std = u_std_track;
+OUT.d_hat = d_hat_log;
+OUT.ref = struct('u', C.Task3.reference_speed);
+OUT.final = struct('u_of', u_of(end));
+OUT.metrics = struct('ss_err_of', abs(u_of_ss - C.Task3.reference_speed));
+end
+
+function local_save_figure(fig, path)
+[folder,~,~] = fileparts(path);
+if ~exist(folder,'dir'), mkdir(folder); end
+try
+    exportgraphics(fig, path, 'Resolution', 150);
+    return;
+catch
+end
+try
+    set(fig,'Renderer','painters');
+    print(fig, path, '-dpng', '-r150');
+catch
+    saveas(fig, path);
+end
+end
+
+function LOG = LOG_dummy()
+LOG = struct(); %#ok<NASGU>
 end
