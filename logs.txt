@@ -1,0 +1,809 @@
+
+╔════════════════════════════════════════════════════════════╗
+║                                                            ║
+║            TASK 3: OFFSET-FREE MPC SIMULATION              ║
+║                                                            ║
+╚════════════════════════════════════════════════════════════╝
+
+════════════════════════════════════════════════════════════
+  STEP 1: CONFIGURATION LOADING
+════════════════════════════════════════════════════════════
+[1.1] Physical Parameters:
+      mx = 100.0 kg, mz = 120.0 kg, Iy = 15.0 kg·m²
+      Sampling time Ts = 0.100 s
+
+[1.2] Reference Setpoint:
+      u_ref  = 1.00 m/s  (surge velocity)
+      zp_ref = 5.00 m    (depth)
+
+[1.3] Disturbance Configuration:
+      Enabled: true
+      Step time:      t = 10.0 s
+      Step magnitude: d = -20.0 N (resistive force)
+      Initial bias:   d = 0.0 N
+
+[1.4] MPC Settings:
+      Prediction horizon: N = 80 steps (8.0 s)
+      State weights (diag(Q)): [50, 1, 1, 0, 200, 50]
+      Input weights (diag(R)): [0.005, 0.050, 0.200]
+
+════════════════════════════════════════════════════════════
+  STEP 2: LINEAR MODEL CONSTRUCTION
+════════════════════════════════════════════════════════════
+[2.1] Continuous-time linearisation...
+      ✓ Linearised around x_eq = [1.00; 0.00; 0.00; 0.00; 5.00; 0.00]
+
+[2.2] Discretisation (Zero-Order Hold)...
+      ✓ Discrete-time model created
+      ✓ Measurements: y = [xp; zp]
+
+[2.3] Model Dimensions:
+      States:       nx = 6
+      Inputs:       nu = 3
+      Measurements: ny = 2
+
+════════════════════════════════════════════════════════════
+  STEP 3: AUGMENTED MODEL FOR DISTURBANCE ESTIMATION
+════════════════════════════════════════════════════════════
+
+================================================================
+  BUILDING AUGMENTED MODEL FOR OFFSET-FREE MPC
+================================================================
+[Step 1] Input model dimensions:
+  • nx = 6 (number of states)
+  • nu = 3 (number of inputs)
+  • ny = 2 (number of measurements)
+
+[Step 2] Disturbance input channel (Bw):
+  • Bw = B(:,1)  (surge force channel)
+  • Size: [6 × 1]
+  • Physical meaning: Bw*d represents external surge force
+  • Sign convention: d>0 assistive, d<0 resistive
+
+[Step 3] Augmented state matrix (A_aug):
+  • Size: [7 × 7]
+  • Structure:
+      A_aug = [ A    Bw ]
+              [ 0     1 ]
+  • Represents: z_{k+1} = [x_{k+1}; d_{k+1}]
+
+[Step 4] Augmented input matrix (B_aug):
+  • Size: [7 × 3]
+  • Last row is zeros (control doesn't affect disturbance)
+
+[Step 5] Augmented output matrix (C_aug) - OBSERVABILITY FIX:
+  *** THIS IS THE CRITICAL FIX FOR TASK 3 ***
+
+  • Output disturbance vector Cd:
+      Cd = [0.0; 0.0]  (disturbance affects xp, not zp)
+
+  • Physical meaning:
+      - Water current creates position drift
+      - xp sensor sees: true_position + current_drift
+      - This correlation allows KF to estimate current
+
+  • Final C_aug matrix:
+      Size: [2 × 7]
+      Structure: C_aug = [C  Cd]
+                       = [C  [1;0]]
+
+  • Output equation:
+      y = C_aug * z
+      y = [C, Cd] * [x; d]
+      y = C*x + Cd*d
+
+      Specifically:
+      xp_measured = xp_true + 1*d  ← d appears here!
+      zp_measured = zp_true + 0*d
+
+[Step 6] OBSERVABILITY VERIFICATION:
+  • Observability matrix size: [14 × 7]
+  • rank(obsv(A_aug, C_aug)) = 7
+  • Required rank (nx_aug)   = 7
+  ✓✓✓ SUCCESS: SYSTEM IS FULLY OBSERVABLE! ✓✓✓
+      All 7 states (including disturbance) can be estimated
+      → Kalman Filter will work correctly
+      → Check 01 should PASS
+
+  • Conditioning analysis:
+      Largest singular value:  σ_max = 2.878e+00
+      Smallest singular value: σ_min = 4.555e-04
+      Condition number:        κ(Ob) = 6.319e+03
+      ✓ Matrix is well-conditioned (κ < 1e10)
+
+================================================================
+  AUGMENTED MODEL CONSTRUCTION COMPLETE
+  Output: A_aug [7x7], B_aug [7x3], C_aug [2x7], Bw [6x1]
+================================================================
+
+[3.1] Post-Construction Summary:
+      Augmented states: nx_aug = 7 (nx + 1 disturbance)
+      A_aug: [7 × 7]
+      B_aug: [7 × 3]
+      C_aug: [2 × 7]
+      Bw:    [6 × 1]
+
+════════════════════════════════════════════════════════════
+  STEP 4: KALMAN FILTER INITIALIZATION
+════════════════════════════════════════════════════════════
+[4.1] Initial State:
+      xhat(0) = [1.00; 0.00; 0.00; 0.00; 5.00; 0.00]
+      dhat(0) = 0.00 N
+
+[4.2] Covariance Matrices:
+      P0(7,7) = 2.0e+02 (disturbance uncertainty)
+      Q(7,7)  = 1.0e-03 (disturbance process noise)
+      R(1,1)  = 1.0e-02 (xp measurement noise)
+      R(2,2)  = 1.0e-02 (zp measurement noise)
+
+      NOTE: Higher Q(7,7) → faster disturbance tracking
+            Higher R      → less trust in measurements
+
+[4.3] Augmented output disturbance column inferred:
+      Cd (from C_aug(:,end)) = [0.010; 0.000]
+
+════════════════════════════════════════════════════════════
+  STEP 5: SIMULATION INITIALIZATION
+════════════════════════════════════════════════════════════
+[5.1] Time Parameters:
+      Simulation duration: 80.0 s
+      Number of steps:     K = 800
+      Time vector:         t ∈ [0.0, 80.0] s
+
+[5.2] Initial Plant State:
+      x(0) = [u=1.00, w=0.00, q=0.00, xp=0.00, zp=5.00, θ=0.00]ᵀ
+
+[5.3] Disturbance Profile:
+      d(t<10.0s)  = 0.0 N
+      d(t>=10.0s) = -20.0 N  (step at k=101)
+
+[5.4] Allocating Storage Arrays:
+      ✓ x_log:    [6 × 801]  (state trajectory)
+      ✓ u_log:    [3 × 800]  (input trajectory)
+      ✓ xhat_log: [6 × 800]  (state estimates)
+      ✓ dhat_log: [1 × 800]  (disturbance estimates)
+      ✓ x_ss_log: [6 × 800]  (target states)
+      ✓ u_ss_log: [3 × 800]  (target inputs)
+
+[5.5] Equilibrium Input (no disturbance):
+      u_eq = [Tsurge=50.00, Theave=0.00, τ=0.00]ᵀ N/Nm
+
+════════════════════════════════════════════════════════════
+  DEBUG LOGGING ENABLED
+════════════════════════════════════════════════════════════
+  Printing every 50 steps and detailed prints around k_step.
+  Note: Cd detected from C_aug(:,end) = [0.010; 0.000]
+  Plant measurement currently uses y = Cy*x (no Cd term in task3_main).
+  This debug will show y_meas vs y_meas_if_bias.
+
+════════════════════════════════════════════════════════════
+  STEP 6: RUNNING SIMULATION
+════════════════════════════════════════════════════════════
+[6.1] Starting time-stepping loop...
+      Progress indicators at k = [1, 200, 400, 600, 800]
+
+      k=   1 (t=  0.0s): Initial step
+Warning: YALMIP has detected that your drive or network is unusually slow.
+This causes a severe delay in OPTIMIZE when I try to find available solvers.
+To avoid this, use the options CACHESOLVERS in SDPSETTINGS.
+See the FAQ for more information.
+Warning: YALMIP has detected that your drive or network is unusually slow.
+This causes a severe delay in OPTIMIZE when I try to find available solvers.
+To avoid this, use the options CACHESOLVERS in SDPSETTINGS.
+See the FAQ for more information.
+
+--- DBG k=   1 t=  0.00 ---
+d_true=  +0.000   d_hat=  -0.020
+u_cmd=[+101.886  +0.000  -0.000]
+y_meas=[  +0.0000   +5.0000]   y_pred=[  +0.0001   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [  +0.0000   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=0.000e+00   ||Bw*d_hat||=1.861e-05
+Target eq residual norm (reduced, no xp): 6.732e-18
+Target eq residual norm: 6.732e-18
+Target y_ss=[  +0.0003   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+2.925e-04 +6.602e-09]
+KF gain (last row for d-state): Kd = [+2.002e-01 +0.000e+00]
+
+--- DBG k=  50 t=  4.90 ---
+d_true=  +0.000   d_hat= +34.867
+u_cmd=[+63.081  -0.000  +0.000]
+y_meas=[  +6.0585   +5.0000]   y_pred=[  +6.0340   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [  +6.0585   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=0.000e+00   ||Bw*d_hat||=3.322e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[  +5.6853   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+5.685e+00 +2.083e-08]
+KF gain (last row for d-state): Kd = [+9.303e+00 +0.000e+00]
+
+--- DBG k=  96 t=  9.50 ---
+d_true=  +0.000   d_hat= +42.455
+u_cmd=[+56.807  +0.000  -0.000]
+y_meas=[ +11.1431   +5.0000]   y_pred=[ +11.1296   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +11.1431   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=0.000e+00   ||Bw*d_hat||=4.045e-02
+Target eq residual norm (reduced, no xp): 6.694e-34
+Target eq residual norm: 6.694e-34
+Target y_ss=[ +10.7051   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.071e+01 +1.814e-08]
+KF gain (last row for d-state): Kd = [+4.366e+00 +0.000e+00]
+
+--- DBG k=  97 t=  9.60 ---
+d_true=  +0.000   d_hat= +42.538
+u_cmd=[+56.735  +0.000  -0.000]
+y_meas=[ +11.2505   +5.0000]   y_pred=[ +11.2371   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +11.2505   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=0.000e+00   ||Bw*d_hat||=4.053e-02
+Target eq residual norm (reduced, no xp): 1.388e-17
+Target eq residual norm: 1.388e-17
+Target y_ss=[ +10.8118   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.081e+01 +1.814e-08]
+KF gain (last row for d-state): Kd = [+4.316e+00 +0.000e+00]
+
+--- DBG k=  98 t=  9.70 ---
+d_true=  +0.000   d_hat= +42.618
+u_cmd=[+56.665  +0.000  -0.000]
+y_meas=[ +11.3578   +5.0000]   y_pred=[ +11.3446   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +11.3578   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=0.000e+00   ||Bw*d_hat||=4.061e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[ +10.9184   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.092e+01 +1.813e-08]
+KF gain (last row for d-state): Kd = [+4.268e+00 +0.000e+00]
+
+--- DBG k=  99 t=  9.80 ---
+d_true=  +0.000   d_hat= +42.697
+u_cmd=[+56.597  +0.000  -0.000]
+y_meas=[ +11.4650   +5.0000]   y_pred=[ +11.4519   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +11.4650   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=0.000e+00   ||Bw*d_hat||=4.068e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[ +11.0249   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.102e+01 +1.813e-08]
+KF gain (last row for d-state): Kd = [+4.220e+00 +0.000e+00]
+DBG MEAS k=100 | d_true= +0.00 | delta_y=[+0.0000 +0.0000] | expected=[+0.0000 +0.0000]
+
+--- DBG k= 100 t=  9.90 ---
+d_true=  +0.000   d_hat= +42.775
+u_cmd=[+56.530  +0.000  -0.000]
+y_meas=[ +11.5722   +5.0000]   y_pred=[ +11.5592   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +11.5722   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=0.000e+00   ||Bw*d_hat||=4.076e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[ +11.1314   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.113e+01 +1.812e-08]
+KF gain (last row for d-state): Kd = [+4.173e+00 +0.000e+00]
+      k= 101 (t= 10.0s): ★ DISTURBANCE STEP! d: 0.0 → -20.0 N
+DBG MEAS k=101 | d_true=-20.00 | delta_y=[-0.2000 +0.0000] | expected=[-0.2000 -0.0000]
+
+--- DBG k= 101 t= 10.00 ---
+d_true= -20.000   d_hat= +42.025
+u_cmd=[+58.181  +0.000  -0.000]
+y_meas=[ +11.4792   +5.0000]   y_pred=[ +11.6064   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +11.2792   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=4.004e-02
+Target eq residual norm (reduced, no xp): 6.592e-34
+Target eq residual norm: 6.592e-34
+Target y_ss=[ +11.1862   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.119e+01 +1.816e-08]
+KF gain (last row for d-state): Kd = [+4.128e+00 +0.000e+00]
+DBG MEAS k=102 | d_true=-20.00 | delta_y=[-0.2000 +0.0000] | expected=[-0.2000 -0.0000]
+
+--- DBG k= 102 t= 10.10 ---
+d_true= -20.000   d_hat= +41.533
+u_cmd=[+59.183  +0.000  -0.000]
+y_meas=[ +11.5853   +5.0000]   y_pred=[ +11.6698   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +11.3853   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.957e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[ +11.2544   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.125e+01 +1.820e-08]
+KF gain (last row for d-state): Kd = [+4.083e+00 +0.000e+00]
+
+--- DBG k= 103 t= 10.20 ---
+d_true= -20.000   d_hat= +41.216
+u_cmd=[+59.751  +0.000  -0.000]
+y_meas=[ +11.6898   +5.0000]   y_pred=[ +11.7446   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +11.4898   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.927e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[ +11.3324   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.133e+01 +1.822e-08]
+KF gain (last row for d-state): Kd = [+4.040e+00 +0.000e+00]
+
+--- DBG k= 104 t= 10.30 ---
+d_true= -20.000   d_hat= +41.019
+u_cmd=[+60.040  +0.000  -0.000]
+y_meas=[ +11.7928   +5.0000]   y_pred=[ +11.8274   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +11.5928   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.908e-02
+Target eq residual norm (reduced, no xp): 1.151e-33
+Target eq residual norm: 1.151e-33
+Target y_ss=[ +11.4172   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.142e+01 +1.824e-08]
+KF gain (last row for d-state): Kd = [+3.997e+00 +0.000e+00]
+
+--- DBG k= 105 t= 10.40 ---
+d_true= -20.000   d_hat= +40.899
+u_cmd=[+60.154  +0.000  -0.000]
+y_meas=[ +11.8945   +5.0000]   y_pred=[ +11.9157   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +11.6945   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.897e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[ +11.5068   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.151e+01 +1.825e-08]
+KF gain (last row for d-state): Kd = [+3.955e+00 +0.000e+00]
+
+--- DBG k= 106 t= 10.50 ---
+d_true= -20.000   d_hat= +40.828
+u_cmd=[+60.166  +0.000  -0.000]
+y_meas=[ +11.9951   +5.0000]   y_pred=[ +12.0078   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +11.7951   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.890e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[ +11.5995   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.160e+01 +1.826e-08]
+KF gain (last row for d-state): Kd = [+3.914e+00 +0.000e+00]
+
+--- DBG k= 107 t= 10.60 ---
+d_true= -20.000   d_hat= +40.787
+u_cmd=[+60.122  +0.000  -0.000]
+y_meas=[ +12.0948   +5.0000]   y_pred=[ +12.1022   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +11.8948   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.886e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[ +11.6943   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.169e+01 +1.827e-08]
+KF gain (last row for d-state): Kd = [+3.874e+00 +0.000e+00]
+
+--- DBG k= 108 t= 10.70 ---
+d_true= -20.000   d_hat= +40.762
+u_cmd=[+60.056  +0.000  -0.000]
+y_meas=[ +12.1935   +5.0000]   y_pred=[ +12.1981   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +11.9935   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.884e-02
+Target eq residual norm (reduced, no xp): 3.943e-24
+Target eq residual norm: 3.943e-24
+Target y_ss=[ +11.7904   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.179e+01 +1.827e-08]
+KF gain (last row for d-state): Kd = [+3.835e+00 +0.000e+00]
+
+--- DBG k= 109 t= 10.80 ---
+d_true= -20.000   d_hat= +40.744
+u_cmd=[+59.986  -0.000  -0.000]
+y_meas=[ +12.2914   +5.0000]   y_pred=[ +12.2947   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +12.0914   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.882e-02
+Target eq residual norm (reduced, no xp): 5.252e-33
+Target eq residual norm: 5.252e-33
+Target y_ss=[ +11.8873   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.189e+01 +1.827e-08]
+KF gain (last row for d-state): Kd = [+3.796e+00 +0.000e+00]
+
+--- DBG k= 110 t= 10.90 ---
+d_true= -20.000   d_hat= +40.728
+u_cmd=[+59.925  -0.000  +0.000]
+y_meas=[ +12.3886   +5.0000]   y_pred=[ +12.3916   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +12.1886   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.881e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[ +11.9844   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.198e+01 +1.827e-08]
+KF gain (last row for d-state): Kd = [+3.758e+00 +0.000e+00]
+
+--- DBG k= 111 t= 11.00 ---
+d_true= -20.000   d_hat= +40.710
+u_cmd=[+59.879  -0.000  +0.000]
+y_meas=[ +12.4851   +5.0000]   y_pred=[ +12.4886   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +12.2851   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.879e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[ +12.0815   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.208e+01 +1.827e-08]
+KF gain (last row for d-state): Kd = [+3.721e+00 +0.000e+00]
+
+--- DBG k= 112 t= 11.10 ---
+d_true= -20.000   d_hat= +40.687
+u_cmd=[+59.851  -0.000  +0.000]
+y_meas=[ +12.5809   +5.0000]   y_pred=[ +12.5853   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +12.3809   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.877e-02
+Target eq residual norm (reduced, no xp): 1.388e-17
+Target eq residual norm: 1.388e-17
+Target y_ss=[ +12.1784   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.218e+01 +1.828e-08]
+KF gain (last row for d-state): Kd = [+3.685e+00 +0.000e+00]
+
+--- DBG k= 113 t= 11.20 ---
+d_true= -20.000   d_hat= +40.658
+u_cmd=[+59.842  -0.000  +0.000]
+y_meas=[ +12.6762   +5.0000]   y_pred=[ +12.6816   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +12.4762   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.874e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[ +12.2751   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.228e+01 +1.828e-08]
+KF gain (last row for d-state): Kd = [+3.650e+00 +0.000e+00]
+
+--- DBG k= 114 t= 11.30 ---
+d_true= -20.000   d_hat= +40.624
+u_cmd=[+59.852  -0.000  +0.000]
+y_meas=[ +12.7709   +5.0000]   y_pred=[ +12.7776   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +12.5709   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.871e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[ +12.3713   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.237e+01 +1.828e-08]
+KF gain (last row for d-state): Kd = [+3.615e+00 +0.000e+00]
+
+--- DBG k= 115 t= 11.40 ---
+d_true= -20.000   d_hat= +40.583
+u_cmd=[+59.878  -0.000  +0.000]
+y_meas=[ +12.8652   +5.0000]   y_pred=[ +12.8731   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +12.6652   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.867e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[ +12.4672   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.247e+01 +1.829e-08]
+KF gain (last row for d-state): Kd = [+3.580e+00 +0.000e+00]
+
+--- DBG k= 116 t= 11.50 ---
+d_true= -20.000   d_hat= +40.537
+u_cmd=[+59.919  -0.000  +0.000]
+y_meas=[ +12.9590   +5.0000]   y_pred=[ +12.9681   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +12.7590   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.863e-02
+Target eq residual norm (reduced, no xp): 1.388e-17
+Target eq residual norm: 1.388e-17
+Target y_ss=[ +12.5627   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.256e+01 +1.829e-08]
+KF gain (last row for d-state): Kd = [+3.547e+00 +0.000e+00]
+
+--- DBG k= 117 t= 11.60 ---
+d_true= -20.000   d_hat= +40.486
+u_cmd=[+59.972  -0.000  +0.000]
+y_meas=[ +13.0524   +5.0000]   y_pred=[ +13.0626   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +12.8524   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.858e-02
+Target eq residual norm (reduced, no xp): 4.927e-34
+Target eq residual norm: 4.927e-34
+Target y_ss=[ +12.6577   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.266e+01 +1.830e-08]
+KF gain (last row for d-state): Kd = [+3.514e+00 +0.000e+00]
+
+--- DBG k= 118 t= 11.70 ---
+d_true= -20.000   d_hat= +40.430
+u_cmd=[+60.036  -0.000  +0.000]
+y_meas=[ +13.1455   +5.0000]   y_pred=[ +13.1567   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +12.9455   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.852e-02
+Target eq residual norm (reduced, no xp): 8.259e-34
+Target eq residual norm: 8.259e-34
+Target y_ss=[ +12.7524   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.275e+01 +1.831e-08]
+KF gain (last row for d-state): Kd = [+3.482e+00 +0.000e+00]
+
+--- DBG k= 119 t= 11.80 ---
+d_true= -20.000   d_hat= +40.370
+u_cmd=[+60.108  -0.000  +0.000]
+y_meas=[ +13.2382   +5.0000]   y_pred=[ +13.2504   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +13.0382   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.847e-02
+Target eq residual norm (reduced, no xp): 1.388e-17
+Target eq residual norm: 1.388e-17
+Target y_ss=[ +12.8467   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.285e+01 +1.831e-08]
+KF gain (last row for d-state): Kd = [+3.450e+00 +0.000e+00]
+
+--- DBG k= 120 t= 11.90 ---
+d_true= -20.000   d_hat= +40.307
+u_cmd=[+60.187  -0.000  +0.000]
+y_meas=[ +13.3307   +5.0000]   y_pred=[ +13.3437   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +13.1307   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.841e-02
+Target eq residual norm (reduced, no xp): 6.270e-24
+Target eq residual norm: 6.270e-24
+Target y_ss=[ +12.9406   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.294e+01 +1.832e-08]
+KF gain (last row for d-state): Kd = [+3.419e+00 +0.000e+00]
+
+--- DBG k= 121 t= 12.00 ---
+d_true= -20.000   d_hat= +40.241
+u_cmd=[+60.272  -0.000  +0.000]
+y_meas=[ +13.4229   +5.0000]   y_pred=[ +13.4367   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +13.2229   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.834e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[ +13.0343   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.303e+01 +1.833e-08]
+KF gain (last row for d-state): Kd = [+3.388e+00 +0.000e+00]
+
+--- DBG k= 150 t= 14.90 ---
+d_true= -20.000   d_hat= +38.194
+u_cmd=[+62.529  +0.000  -0.000]
+y_meas=[ +16.0694   +5.0000]   y_pred=[ +16.0854   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +15.8694   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.639e-02
+Target eq residual norm (reduced, no xp): 2.082e-17
+Target eq residual norm: 2.082e-17
+Target y_ss=[ +15.7035   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+1.570e+01 +1.875e-08]
+KF gain (last row for d-state): Kd = [+2.691e+00 +0.000e+00]
+      k= 200 (t= 19.9s): 25% complete, u=0.940 m/s, d̂=35.99 N
+
+--- DBG k= 200 t= 19.90 ---
+d_true= -20.000   d_hat= +35.957
+u_cmd=[+64.543  +0.000  -0.000]
+y_meas=[ +20.7140   +5.0000]   y_pred=[ +20.7256   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +20.5140   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.426e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[ +20.3660   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+2.037e+01 +1.982e-08]
+KF gain (last row for d-state): Kd = [+1.989e+00 +0.000e+00]
+
+--- DBG k= 250 t= 24.90 ---
+d_true= -20.000   d_hat= +34.677
+u_cmd=[+65.696  +0.000  -0.000]
+y_meas=[ +25.4509   +5.0000]   y_pred=[ +25.4599   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +25.2509   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.304e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[ +25.1132   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+2.511e+01 +2.106e-08]
+KF gain (last row for d-state): Kd = [+1.581e+00 +0.000e+00]
+
+--- DBG k= 300 t= 29.90 ---
+d_true= -20.000   d_hat= +33.846
+u_cmd=[+66.450  +0.000  -0.000]
+y_meas=[ +30.2424   +5.0000]   y_pred=[ +30.2497   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +30.0424   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.225e-02
+Target eq residual norm (reduced, no xp): 1.984e-33
+Target eq residual norm: 1.984e-33
+Target y_ss=[ +29.9113   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+2.991e+01 +2.234e-08]
+KF gain (last row for d-state): Kd = [+1.314e+00 +0.000e+00]
+
+--- DBG k= 350 t= 34.90 ---
+d_true= -20.000   d_hat= +33.263
+u_cmd=[+66.982  -0.000  -0.000]
+y_meas=[ +35.0697   +5.0000]   y_pred=[ +35.0759   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +34.8697   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.169e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[ +34.7433   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+3.474e+01 +6.327e-08]
+KF gain (last row for d-state): Kd = [+1.127e+00 +0.000e+00]
+      k= 400 (t= 39.9s): 50% complete, u=0.973 m/s, d̂=32.84 N
+
+--- DBG k= 400 t= 39.90 ---
+d_true= -20.000   d_hat= +32.830
+u_cmd=[+67.379  -0.000  +0.000]
+y_meas=[ +39.9224   +5.0000]   y_pred=[ +39.9278   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +39.7224   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.128e-02
+Target eq residual norm (reduced, no xp): 4.758e-24
+Target eq residual norm: 4.758e-24
+Target y_ss=[ +39.5995   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+3.960e+01 +6.442e-08]
+KF gain (last row for d-state): Kd = [+9.883e-01 +0.000e+00]
+
+--- DBG k= 450 t= 44.90 ---
+d_true= -20.000   d_hat= +32.496
+u_cmd=[+67.686  -0.000  +0.000]
+y_meas=[ +44.7942   +5.0000]   y_pred=[ +44.7990   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +44.5942   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.096e-02
+Target eq residual norm (reduced, no xp): 2.082e-17
+Target eq residual norm: 2.082e-17
+Target y_ss=[ +44.4740   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+4.447e+01 +6.399e-08]
+KF gain (last row for d-state): Kd = [+8.819e-01 +0.000e+00]
+
+--- DBG k= 500 t= 49.90 ---
+d_true= -20.000   d_hat= +32.230
+u_cmd=[+67.770  -0.000  +0.000]
+y_meas=[ +49.6799   +5.0000]   y_pred=[ +49.6841   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +49.4799   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.071e-02
+Target eq residual norm (reduced, no xp): 3.469e-18
+Target eq residual norm: 3.469e-18
+Target y_ss=[ +49.3618   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+4.936e+01 +6.365e-08]
+KF gain (last row for d-state): Kd = [+7.978e-01 +0.000e+00]
+
+--- DBG k= 550 t= 54.90 ---
+d_true= -20.000   d_hat= +32.013
+u_cmd=[+67.987  -0.000  +0.000]
+y_meas=[ +54.5708   +5.0000]   y_pred=[ +54.5747   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +54.3708   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.050e-02
+Target eq residual norm (reduced, no xp): 1.388e-17
+Target eq residual norm: 1.388e-17
+Target y_ss=[ +54.2545   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+5.425e+01 +6.337e-08]
+KF gain (last row for d-state): Kd = [+7.299e-01 +0.000e+00]
+      k= 600 (t= 59.9s): 75% complete, u=0.981 m/s, d̂=31.84 N
+
+--- DBG k= 600 t= 59.90 ---
+d_true= -20.000   d_hat= +31.832
+u_cmd=[+68.168  -0.000  +0.000]
+y_meas=[ +59.4719   +5.0000]   y_pred=[ +59.4753   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +59.2719   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.033e-02
+Target eq residual norm (reduced, no xp): 6.939e-18
+Target eq residual norm: 6.939e-18
+Target y_ss=[ +59.1570   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+5.916e+01 +6.313e-08]
+KF gain (last row for d-state): Kd = [+6.739e-01 +0.000e+00]
+
+--- DBG k= 650 t= 64.90 ---
+d_true= -20.000   d_hat= +31.679
+u_cmd=[+68.321  -0.000  +0.000]
+y_meas=[ +64.3817   +5.0000]   y_pred=[ +64.3849   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +64.1817   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.019e-02
+Target eq residual norm (reduced, no xp): 3.469e-18
+Target eq residual norm: 3.469e-18
+Target y_ss=[ +64.0681   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+6.407e+01 +6.293e-08]
+KF gain (last row for d-state): Kd = [+6.272e-01 +0.000e+00]
+
+--- DBG k= 700 t= 69.90 ---
+d_true= -20.000   d_hat= +31.548
+u_cmd=[+68.452  -0.000  +0.000]
+y_meas=[ +69.2990   +5.0000]   y_pred=[ +69.3019   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +69.0990   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=3.006e-02
+Target eq residual norm (reduced, no xp): 1.735e-17
+Target eq residual norm: 1.735e-17
+Target y_ss=[ +68.9864   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+6.899e+01 +6.276e-08]
+KF gain (last row for d-state): Kd = [+5.876e-01 +0.000e+00]
+
+--- DBG k= 750 t= 74.90 ---
+d_true= -20.000   d_hat= +31.434
+u_cmd=[+68.566  -0.000  +0.000]
+y_meas=[ +74.2227   +5.0000]   y_pred=[ +74.2254   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +74.0227   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=2.995e-02
+Target eq residual norm (reduced, no xp): 3.469e-18
+Target eq residual norm: 3.469e-18
+Target y_ss=[ +73.9110   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+7.391e+01 +6.261e-08]
+KF gain (last row for d-state): Kd = [+5.538e-01 +0.000e+00]
+      k= 800 (t= 79.9s): 100% complete, u=0.986 m/s, d̂=31.34 N
+
+--- DBG k= 800 t= 79.90 ---
+d_true= -20.000   d_hat= +31.334
+u_cmd=[+68.666  -0.000  +0.000]
+y_meas=[ +79.1519   +5.0000]   y_pred=[ +79.1544   +5.0000]
+innov =[%+9.4f %+9.4f]
+y_meas_if_bias(y + Cd*d_true) = [ +78.9519   +5.0000]
+Cd = [+0.010 +0.000]
+||Bw*d_true||=1.906e-02   ||Bw*d_hat||=2.986e-02
+Target eq residual norm (reduced, no xp): 1.735e-17
+Target eq residual norm: 1.735e-17
+Target y_ss=[ +78.8411   +5.0000], y_ref=[  +0.0000   +5.0000], y_err=[+7.884e+01 +6.248e-08]
+KF gain (last row for d-state): Kd = [+5.246e-01 +0.000e+00]
+
+[6.2] Simulation Complete!
+      Total time:   55.90 s
+      Avg per step: 69.87 ms
+
+════════════════════════════════════════════════════════════
+  STEP 7: PERFORMANCE ANALYSIS
+════════════════════════════════════════════════════════════
+[7.1] Final State:
+      u(T)  = 0.9864 m/s  (ref: 1.00 m/s, error: -1.36e-02 m/s)
+      zp(T) = 5.0000 m    (ref: 5.00 m, error: 6.23e-08 m)
+      xp(T) = 79.45 m
+
+[7.2] Steady-State Performance (last 10s):
+      u:  mean = 0.9853 m/s, std = 6.52e-04 m/s
+      zp: mean = 5.0000 m,   std = 1.50e-10 m
+      Speed error from reference: 1.47e-02 m/s
+
+[7.3] Disturbance Estimation:
+      d_true(T)  = -20.00 N
+      d_hat(T)   = 31.33 N
+      d_hat mean (last 10s) = 31.44 N, std = 6.25e-02 N
+      Estimation error: 5.13e+01 N
+
+════════════════════════════════════════════════════════════
+  STEP 8: GENERATING PLOTS
+════════════════════════════════════════════════════════════
+[8.1] Saved plot: /Users/peasngravy/Documents/MATLAB/MPC-2025-26 Task3-4/runningchecks/task3/task3_main_results.png
+
+════════════════════════════════════════════════════════════
+  STEP 9: PACKAGING RESULTS
+════════════════════════════════════════════════════════════
+[9.1] Output structure created with fields:
+      • t:      time vector [801 × 1]
+      • x:      states [6 × 801]
+      • u:      inputs [3 × 800]
+      • xhat:   estimates [6 × 800]
+      • dhat:   disturbance estimates [1 × 800]
+      • d_true: true disturbance [1 × 800]
+
+╔════════════════════════════════════════════════════════════╗
+║                                                            ║
+║                 SIMULATION COMPLETE! ✓                    ║
+║                                                            ║
+╚════════════════════════════════════════════════════════════╝
+
+
+ans = 
+
+  struct with fields:
+
+         t: [801×1 double]
+         x: [6×801 double]
+         u: [3×800 double]
+      xhat: [6×800 double]
+      dhat: [-0.0195 -0.0127 0.0078 0.0437 0.1018 0.1947 0.3394 0.5559 0.8656 1.2888 1.8426 2.5385 3.3802 … ] (1×800 double)
+      x_ss: [6×800 double]
+      u_ss: [3×800 double]
+         y: [2×800 double]
+    d_true: [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 … ] (1×800 double)
+
+>> 
